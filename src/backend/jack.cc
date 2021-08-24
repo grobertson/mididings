@@ -141,39 +141,57 @@ int JACKBackend::connect_matching_ports(
         PortNameVector const & external_ports,
         bool out)
 {
+    int i, count = 0, error, no_aliases;
+    jack_port_t *jack_port;
+    das::regex regex;
+    char *aliases[2];
+
+    aliases[0] = (char *)malloc(jack_port_name_size());
+    aliases[1] = (char *)malloc(jack_port_name_size());
+
     try {
         // compile pattern into regex object
-        das::regex regex(pattern, true);
-        int count = 0;
-
-        // for each external JACK MIDI port we might connect to...
-        BOOST_FOREACH (std::string const & external_port, external_ports) {
-            // check if port name matches regex
-            if (regex.match(external_port)) {
-                // connect output to input port
-                std::string const & output_port =
-                        out ? port_name : external_port;
-                std::string const & input_port =
-                        out ? external_port : port_name;
-
-                int error = jack_connect(_client, output_port.c_str(),
-                                                  input_port.c_str());
-
-                if (error && error != EEXIST) {
-                    std::cerr << "could not connect " << output_port
-                              << " to " << input_port << std::endl;
-                }
-
-                ++count;
-            }
-        }
-        return count;
+        regex = das::regex(pattern, true);
     }
     catch (das::regex::compile_error & ex) {
         throw std::runtime_error(das::make_string()
                 << "failed to parse regular expression '"
                 << pattern << "': " << ex.what());
     }
+
+    // for each external JACK MIDI port we might connect to...
+    BOOST_FOREACH (std::string const & external_port, external_ports) {
+        if (regex.match(external_port))
+            goto connect;
+
+        // check if one of the aliases match
+        jack_port = jack_port_by_name(_client, external_port.c_str());
+        no_aliases = jack_port_get_aliases(jack_port, aliases);
+        for (i = 0; i < no_aliases; i++)
+            if (regex.match(aliases[i]))
+                goto connect;
+
+        // No matches? continue.
+        continue;
+
+connect:
+        // connect output to input port
+        std::string const & output_port = out ? port_name : external_port;
+        std::string const & input_port = out ? external_port : port_name;
+
+	error = jack_connect(_client, output_port.c_str(), input_port.c_str());
+        if (error && error != EEXIST) {
+            std::cerr << "could not connect " << output_port
+                      << " to " << input_port << std::endl;
+        }
+
+        count++;
+    }
+
+    free(aliases[0]);
+    free(aliases[1]);
+
+    return count;
 }
 
 
